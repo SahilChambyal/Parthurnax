@@ -10,56 +10,85 @@ import talib
 # This file just contains the functions that are used in the main file
 
 
-def create_target_labels(df, profit_threshold=0.003, lookforward_window=30, min_trades_per_day=10):
+def create_target_labels(df, profit_threshold=0.003, lookforward_window=30):
     """
-    Create target labels for ML model based on future price movements
-    1 for buy signals, -1 for sell signals, 0 for hold
+    Create target labels based on maximum future profitability within the lookforward window.
+    Prioritizes higher profitability over spacing between trades.
+    Handles buy and sell signals separately.
 
     Parameters:
     df: DataFrame with OHLCV data
-    profit_threshold: Minimum price movement to consider for a trade (0.3% default)
+    profit_threshold: Minimum price movement to consider for a trade (default 0.3%)
     lookforward_window: How far to look ahead for price movement
-    min_trades_per_day: Target minimum number of trades per day
+
+    Returns:
+    Updated DataFrame with 'target' column.
     """
     df = df.copy()
 
-    # Convert price columns to float if they aren't already
+    # Ensure Close prices are float
     df['Close'] = df['Close'].astype(float)
 
-    # Calculate future returns for different time windows
+    # Calculate future returns within the lookforward window
     future_returns = []
-    for window in [5, 15, 30]:  # Multiple windows for robustness
-        future_return = df['Close'].shift(-window) / df['Close'] - 1
+    for i in range(1, lookforward_window + 1):
+        future_return = df['Close'].shift(-i) / df['Close'] - 1
         future_returns.append(future_return)
 
-    # Combine future returns (average them)
-    df['future_return'] = sum(future_returns) / len(future_returns)
+    # Combine future returns into a DataFrame for easier processing
+    future_returns_df = pd.concat(future_returns, axis=1)
+    future_returns_df.columns = [f'return_{i}' for i in range(1, lookforward_window + 1)]
 
-    # Initialize labels
+    # Calculate maximum and minimum returns
+    df['max_return'] = future_returns_df.max(axis=1)
+    df['min_return'] = future_returns_df.min(axis=1)
+
+    # Initialize target column with zeros
     df['target'] = 0
 
-    # Calculate price volatility
-    df['volatility'] = df['Close'].rolling(window=lookforward_window).std()
+    # Assign buy (1) signals based on maximum return
+    df.loc[df['max_return'] > profit_threshold, 'target'] = 1
 
-    # Adjust profit threshold based on local volatility
-    dynamic_threshold = profit_threshold * (df['volatility'] / df['volatility'].mean())
+    # Assign sell (-1) signals based on minimum return
+    df.loc[df['min_return'] < -profit_threshold, 'target'] = -1
 
-    # Generate basic signals based on future returns
-    df.loc[df['future_return'] > dynamic_threshold, 'target'] = 1  # Buy signal
-    df.loc[df['future_return'] < -dynamic_threshold, 'target'] = -1  # Sell signal
-
-    # Ensure minimum spacing between trades
-    min_spacing = int(24 * 60 / min_trades_per_day)  # Assuming 1-minute data
-
-    last_signal_idx = 0
+    # Resolve conflicts for buy signals
+    last_buy_signal_idx = None
     for i in range(len(df)):
-        if df.iloc[i]['target'] != 0:
-            if i - last_signal_idx < min_spacing:
-                df.iloc[i, df.columns.get_loc('target')] = 0
+        if df['target'].iloc[i] == 1:
+            # Check for overlapping buy signals
+            if last_buy_signal_idx is not None and i - last_buy_signal_idx < lookforward_window:
+                # Compare current buy signal with last buy signal
+                if df['max_return'].iloc[i] > df['max_return'].iloc[last_buy_signal_idx]:
+                    # Current buy signal is better, remove previous
+                    df.iloc[last_buy_signal_idx, df.columns.get_loc('target')] = 0
+                    last_buy_signal_idx = i
+                else:
+                    # Previous buy signal is better, remove current
+                    df.iloc[i, df.columns.get_loc('target')] = 0
             else:
-                last_signal_idx = i
+                last_buy_signal_idx = i
+
+    # Resolve conflicts for sell signals
+    last_sell_signal_idx = None
+    for i in range(len(df)):
+        if df['target'].iloc[i] == -1:
+            # Check for overlapping sell signals
+            if last_sell_signal_idx is not None and i - last_sell_signal_idx < lookforward_window:
+                # Compare current sell signal with last sell signal
+                if df['min_return'].iloc[i] < df['min_return'].iloc[last_sell_signal_idx]:
+                    # Current sell signal is better (more negative min_return), remove previous
+                    df.iloc[last_sell_signal_idx, df.columns.get_loc('target')] = 0
+                    last_sell_signal_idx = i
+                else:
+                    # Previous sell signal is better, remove current
+                    df.iloc[i, df.columns.get_loc('target')] = 0
+            else:
+                last_sell_signal_idx = i
 
     return df
+
+
 
 def create_features(df, windows=[5, 15, 30, 60]):
     """
@@ -146,12 +175,12 @@ def create_features(df, windows=[5, 15, 30, 60]):
     return df, features
 
 # Function to prepare data for ML
-def prepare_ml_data(df, lookforward_window=30, profit_threshold=0.003, min_trades_per_day=12):
+def prepare_ml_data(df, lookforward_window=30, profit_threshold=0.003):
     """
     Prepare data for machine learning model
     """
     # Create target labels
-    df = create_target_labels(df, profit_threshold, lookforward_window, min_trades_per_day)
+    df = create_target_labels(df, profit_threshold, lookforward_window)
 
     # Create features
     df, feature_columns = create_features(df)
