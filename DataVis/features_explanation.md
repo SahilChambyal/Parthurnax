@@ -256,7 +256,7 @@ def plot_key_indicators(df, window=100):
     plt.tight_layout()
     plt.show()
 ```
-## Moving Average Features
+## Moving Average Features in Detail
 
 ### Simple Moving Average (SMA)
 ```python

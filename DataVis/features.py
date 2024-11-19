@@ -3,6 +3,13 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 import talib
 
+# Explanation of the functions
+# create_target_labels: Create target labels for ML model based on future price movements
+# create_features: Create features for ML model
+# prepare_ml_data: Prepare data for machine learning model
+# This file just contains the functions that are used in the main file
+
+
 def create_target_labels(df, profit_threshold=0.003, lookforward_window=30, min_trades_per_day=10):
     """
     Create target labels for ML model based on future price movements
